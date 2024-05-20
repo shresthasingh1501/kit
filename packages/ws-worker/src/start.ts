@@ -38,94 +38,94 @@ const {
   WORKER_STATE_PROPS_TO_REMOVE,
 } = process.env;
 
-const args = yargs(hideBin(process.argv))
+const setArg = (cliValue: any, envValue: any, defaultValue: any) => {
+  return cliValue !== undefined ? cliValue : envValue !== undefined ? envValue : defaultValue;
+};
+
+const parser = yargs(hideBin(process.argv))
   .command('server', 'Start a ws-worker server')
   .option('port', {
     alias: 'p',
-    description: 'Port to run the server on. Env: WORKER_PORT',
+    description: 'Port to run the server on.',
     type: 'number',
-    default: WORKER_PORT || 2222,
   })
-  // TODO maybe this is positional and required?
-  // frees up -l for the log
   .option('lightning', {
     alias: ['l', 'lightning-service-url'],
-    description:
-      'Base url to Lightning websocket endpoint, eg, ws://localhost:4000/worker. Set to "mock" to use the default mock server. Env: WORKER_LIGHTNING_SERVICE_URL',
-    default: WORKER_LIGHTNING_SERVICE_URL || 'ws://localhost:4000/worker',
+    description: 'Base url to Lightning websocket endpoint, eg, ws://localhost:4000/worker. Set to "mock" to use the default mock server.',
+    type: 'string',
   })
   .option('repo-dir', {
     alias: 'd',
-    description:
-      'Path to the runtime repo (where modules will be installed). Env: WORKER_REPO_DIR',
-    default: WORKER_REPO_DIR,
+    description: 'Path to the runtime repo (where modules will be installed).',
+    type: 'string',
   })
   .option('secret', {
     alias: 's',
-    description:
-      'Worker secret. (comes from WORKER_SECRET by default). Env: WORKER_SECRET',
-    default: WORKER_SECRET,
+    description: 'Worker secret.',
+    type: 'string',
+
   })
   .option('lightning-public-key', {
-    description:
-      'Base64-encoded public key. Used to verify run tokens. Env: WORKER_LIGHTNING_PUBLIC_KEY',
-    default: WORKER_LIGHTNING_PUBLIC_KEY,
+    description: 'Base64-encoded public key. Used to verify run tokens.',
+    type: 'string',
   })
   .option('log', {
-    description:
-      'Set the log level for stdout (default to info, set to debug for verbose output). Env: WORKER_LOG_LEVEL',
-    default: WORKER_LOG_LEVEL || 'debug',
+    description: 'Set the log level for stdout (default to info, set to debug for verbose output).',
     type: 'string',
   })
   .option('loop', {
     description: 'Disable the claims loop',
-    default: true,
     type: 'boolean',
   })
   .option('mock', {
     description: 'Use a mock runtime engine',
-    default: false,
     type: 'boolean',
   })
   .option('backoff', {
-    description:
-      'Claim backoff rules: min/max (in seconds). Env: WORKER_BACKOFF',
-    default: WORKER_BACKOFF || '1/10',
+    description: 'Claim backoff rules: min/max (in seconds).',
+    type: 'string',
   })
   .option('capacity', {
-    description: 'max concurrent workers. Env: WORKER_CAPACITY',
-    default: WORKER_CAPACITY ? parseInt(WORKER_CAPACITY) : 5,
+    description: 'Max concurrent workers.',
     type: 'number',
   })
   .option('state-props-to-remove', {
-    description:
-      'A list of properties to remove from the final state returned by a job. Env: WORKER_STATE_PROPS_TO_REMOVE',
-    default: WORKER_STATE_PROPS_TO_REMOVE ?? ['configuration', 'response'],
+    description: 'A list of properties to remove from the final state returned by a job.',
     type: 'array',
   })
   .option('run-memory', {
-    description:
-      'Maximum memory allocated to a single run, in mb. Env: WORKER_MAX_RUN_MEMORY_MB',
+    description: 'Maximum memory allocated to a single run, in mb.',
     type: 'number',
-    default: WORKER_MAX_RUN_MEMORY_MB
-      ? parseInt(WORKER_MAX_RUN_MEMORY_MB)
-      : 500,
   })
   .option('max-run-duration-seconds', {
     alias: 't',
-    description:
-      'Default run timeout for the server, in seconds. Env: WORKER_MAX_RUN_DURATION_SECONDS',
+    description: 'Default run timeout for the server, in seconds.',
     type: 'number',
-    default: WORKER_MAX_RUN_DURATION_SECONDS || 60 * 5, // 5 minutes
   })
   .parse() as Args;
+
+const args = {
+  ...parser,
+  port: setArg(parser.port, WORKER_PORT ? parseInt(WORKER_PORT) : undefined, 2222),
+  lightning: setArg(parser.lightning, WORKER_LIGHTNING_SERVICE_URL, 'ws://localhost:4000/worker'),
+  repoDir: setArg(parser.repoDir, WORKER_REPO_DIR, undefined),
+  secret: setArg(parser.secret, WORKER_SECRET, undefined),
+  lightningPublicKey: setArg(parser.lightningPublicKey, WORKER_LIGHTNING_PUBLIC_KEY, undefined),
+  log: setArg(parser.log, WORKER_LOG_LEVEL, 'debug') as LogLevel,
+  loop: parser.loop ?? true,
+  mock: parser.mock ?? false,
+  backoff: setArg(parser.backoff, WORKER_BACKOFF, '1/10'),
+  capacity: setArg(parser.capacity, WORKER_CAPACITY ? parseInt(WORKER_CAPACITY) : undefined, 5),
+  statePropsToRemove: setArg(parser.statePropsToRemove, WORKER_STATE_PROPS_TO_REMOVE ? WORKER_STATE_PROPS_TO_REMOVE.split(',') : undefined, ['configuration', 'response']),
+  runMemory: setArg(parser.runMemory, WORKER_MAX_RUN_MEMORY_MB ? parseInt(WORKER_MAX_RUN_MEMORY_MB) : undefined, 500),
+  maxRunDurationSeconds: setArg(parser.maxRunDurationSeconds, WORKER_MAX_RUN_DURATION_SECONDS ? parseInt(WORKER_MAX_RUN_DURATION_SECONDS) : undefined, 300),
+};
 
 const logger = createLogger('SRV', { level: args.log });
 
 if (args.lightning === 'mock') {
   args.lightning = 'ws://localhost:8888/worker';
   if (!args.secret) {
-    // Set a fake secret to stop the console warning
     args.secret = 'abdefg';
   }
 } else if (!args.secret) {
@@ -133,9 +133,7 @@ if (args.lightning === 'mock') {
   process.exit(1);
 }
 
-const [minBackoff, maxBackoff] = args.backoff
-  .split('/')
-  .map((n: string) => parseInt(n, 10) * 1000);
+const [minBackoff, maxBackoff] = args.backoff.split('/').map((n: string) => parseInt(n, 10) * 1000);
 
 function engineReady(engine: any) {
   logger.debug('Creating worker server...');
@@ -146,7 +144,6 @@ function engineReady(engine: any) {
     logger,
     secret: args.secret,
     noLoop: !args.loop,
-    // TODO need to feed this through properly
     backoff: {
       min: minBackoff,
       max: maxBackoff,
@@ -155,21 +152,11 @@ function engineReady(engine: any) {
   };
 
   if (args.lightningPublicKey) {
-    logger.info(
-      'Lightning public key found: run tokens from Lightning will be verified by this worker'
-    );
-    workerOptions.runPublicKey = Buffer.from(
-      args.lightningPublicKey,
-      'base64'
-    ).toString();
+    logger.info('Lightning public key found: run tokens from Lightning will be verified by this worker');
+    workerOptions.runPublicKey = Buffer.from(args.lightningPublicKey, 'base64').toString();
   }
 
-  const {
-    logger: _l,
-    secret: _s,
-    runPublicKey,
-    ...humanOptions
-  } = workerOptions;
+  const { logger: _l, secret: _s, runPublicKey, ...humanOptions } = workerOptions;
   logger.debug('Worker options:', humanOptions);
 
   createWorker(engine, workerOptions);
